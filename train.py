@@ -5,7 +5,34 @@ import numpy as np
 import tensorflow as tf
 from PIL import Image
 import pycocotools.coco as coco_tools  # pycocotools 설치 필요: pip install pycocotools
+from tensorflow.keras import layers
+import coral_deeplab as cdl
 
+# Convolutional Block Attention Model
+def cbam_block(input_feature, ratio=8, name=None):
+    x = input_feature
+    channel = x.shape[-1]
+    shared_mlp = tf.keras.Sequential([
+        layers.Dense(channel//ratio, activation='relu', kernel_initializer='he_normal'),
+        layers.Dense(channel, kernel_initializer='he_normal')
+    ], name=f"{name}_mlp" if name else None)
+
+    avg_pool = tf.reduce_mean(x, axis=[1,2], keepdims=True)
+    max_pool = tf.reduce_max(x, axis=[1,2], keepdims=True)
+
+    channel_attention = tf.nn.sigmoid(shared_mlp(avg_pool) + shared_mlp(max_pool))
+    x = layers.Multiply(name=f"{name}_channel_mul" if name else None)([x, channel_attention])
+
+    avg_pool_sp = tf.reduce_mean(x, axis=-1, keepdims=True)
+    max_pool_sp = tf.reduce_max(x, axis=-1, keepdims=True)
+    concat = layers.Concatenate(axis=-1)([avg_pool_sp, max_pool_sp])
+    spatial_attention = layers.Conv2D(filters=1, kernel_size=7, padding='same',
+                                      activation='sigmoid', kernel_initializer='he_normal',
+                                      name=f"{name}_spatial_conv" if name else None)(concat)
+
+    x = layers.Multiply(name=f"{name}_spatial_mul" if name else None)([x, spatial_attention])
+    return x
+    
 # 마스크 ID 리매핑 함수
 def remap_mask(mask, id_mapping):
     remapped = np.zeros_like(mask, dtype=np.uint8)
@@ -163,10 +190,25 @@ if 0 not in unique_ids:
 id_mapping = {orig_id: new_id for new_id, orig_id in enumerate(unique_ids)}
 num_classes = len(unique_ids)
 
+def CoralDeepLabV3Plus_CBAM(input_shape, n_classes):
+    base = cdl.applications.CoralDeepLabV3Plus(input_shape=input_shape, n_classes=n_classes)
+    encoder_layers = [layer for layer in base.layers if "encoder_block" in layer.name]
+    x = base.input
+    outputs = {}
+
+    for layer in base.layers:
+        x = layer(x)
+        if layer.name in encoder_layers:
+            x = cbam_block(x, name=layer.name)
+        outputs[layer.name] = x
+
+    # Reconstruct model up to final output
+    return tf.keras.Model(inputs=base.input, outputs=base.output)
+    
 # 모델 설정
 try:
     import coral_deeplab as cdl
-    model = cdl.applications.CoralDeepLabV3Plus(input_shape=(513, 513, 3),
+    model = CoralDeepLabV3Plus_CBAM(input_shape=(513, 513, 3),
                                             n_classes=num_classes)
 except ImportError:
     raise ImportError("CoralDeepLabV3 모델을 찾을 수 없습니다. coral_deeplab 패키지 설치 또는 모델 구현을 확인하세요.")
