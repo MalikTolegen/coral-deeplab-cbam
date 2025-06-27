@@ -3,6 +3,7 @@ import numpy as np
 from tensorflow.keras.layers import Input
 from tensorflow.keras.models import Model
 import coral_deeplab as cdl
+from train import cbam_block
 
 NUM_CLASSES = 6
 FIXED_SIZE = (513, 513)
@@ -11,7 +12,7 @@ input_path = "deeplabv3_epoch500.h5"
 output_path = "model_quant_fixed.tflite"
 
 # 1) 모델 초기화 (input_shape 명시)
-base_model = cdl.applications.CoralDeepLabV3Plus(input_shape=(513, 513, 3), n_classes=NUM_CLASSES)
+base_model = CoralDeepLabV3Plus(input_shape=(513, 513, 3), n_classes=NUM_CLASSES)
 
 # 2) 가중치 로드
 base_model.load_weights(input_path)
